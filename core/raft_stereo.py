@@ -5,6 +5,7 @@ from core.update import BasicMultiUpdateBlock
 from core.extractor import BasicEncoder, MultiBasicEncoder, ResidualBlock
 from core.corr import CorrBlock1D, PytorchAlternateCorrBlock1D, CorrBlockFast1D, AlternateCorrBlock
 from core.utils.utils import coords_grid, upflow8
+import time
 
 
 try:
@@ -67,12 +68,17 @@ class RAFTStereo(nn.Module):
         return up_flow.reshape(N, D, factor*H, factor*W)
 
 
-    def forward(self, image1, image2, iters=12, flow_init=None, test_mode=False):
+    def forward(self, image1, image2, iters=12, flow_init=None, test_mode=False, profile=False):
         """ Estimate optical flow between pair of frames """
 
         image1 = (2 * (image1 / 255.0) - 1.0).contiguous()
         image2 = (2 * (image2 / 255.0) - 1.0).contiguous()
 
+        print(f'Processing Image: {image1.shape} Iterations: {iters}')
+        
+        if profile:
+            torch.cuda.synchronize()
+            start_context = time.perf_counter()
         # run the context network
         with autocast(enabled=self.args.mixed_precision):
             if self.args.shared_backbone:
@@ -87,6 +93,14 @@ class RAFTStereo(nn.Module):
             # Rather than running the GRU's conv layers on the context features multiple times, we do it once at the beginning 
             inp_list = [list(conv(i).split(split_size=conv.out_channels//3, dim=1)) for i,conv in zip(inp_list, self.context_zqr_convs)]
 
+        if profile:
+            torch.cuda.synchronize()
+            end_context = time.perf_counter()
+            context_time = end_context - start_context
+        
+            torch.cuda.synchronize()
+            start_corr = time.perf_counter()
+
         if self.args.corr_implementation == "reg": # Default
             corr_block = CorrBlock1D
             fmap1, fmap2 = fmap1.float(), fmap2.float()
@@ -98,23 +112,70 @@ class RAFTStereo(nn.Module):
         elif self.args.corr_implementation == "alt_cuda": # Faster version of alt
             corr_block = AlternateCorrBlock
         corr_fn = corr_block(fmap1, fmap2, radius=self.args.corr_radius, num_levels=self.args.corr_levels)
+        
+        if profile:
+            torch.cuda.synchronize()
+            end_corr = time.perf_counter()
+            corr_time = end_corr - start_corr
+
 
         coords0, coords1 = self.initialize_flow(net_list[0])
 
         if flow_init is not None:
             coords1 = coords1 + flow_init
 
+        if profile:
+            gru_lowres_time = 0
+            gru_medres_time = 0
+            gru_highres_time = 0
+            gru_total_time = 0
+            upflow_time = 0
+            
         flow_predictions = []
         for itr in range(iters):
+            if profile:
+                torch.cuda.synchronize()
+                start_gru_total = time.perf_counter()
+
             coords1 = coords1.detach()
             corr = corr_fn(coords1) # index correlation volume
             flow = coords1 - coords0
             with autocast(enabled=self.args.mixed_precision):
                 if self.args.n_gru_layers == 3 and self.args.slow_fast_gru: # Update low-res GRU
+                    if profile:
+                        torch.cuda.synchronize()
+                        start_gru_lowres = time.perf_counter()
+                    # print(f'Running 1/32 GRU')
                     net_list = self.update_block(net_list, inp_list, iter32=True, iter16=False, iter08=False, update=False)
+                    if profile:
+                        torch.cuda.synchronize()
+                        end_gru_lowres = time.perf_counter()
+                        gru_lowres_time += end_gru_lowres - start_gru_lowres
                 if self.args.n_gru_layers >= 2 and self.args.slow_fast_gru:# Update low-res GRU and mid-res GRU
+                    if profile:
+                        torch.cuda.synchronize()
+                        start_gru_medres = time.perf_counter()
                     net_list = self.update_block(net_list, inp_list, iter32=self.args.n_gru_layers==3, iter16=True, iter08=False, update=False)
+                    # print(f'Running 1/16 GRU and 1/32 if : {self.args.n_gru_layers==3}')
+                    if profile:
+                        torch.cuda.synchronize()
+                        end_gru_medres = time.perf_counter()
+                        gru_medres_time += end_gru_medres - start_gru_medres
+                
+                if profile:
+                    torch.cuda.synchronize()
+                    start_gru_highres = time.perf_counter()
                 net_list, up_mask, delta_flow = self.update_block(net_list, inp_list, corr, flow, iter32=self.args.n_gru_layers==3, iter16=self.args.n_gru_layers>=2)
+                # print(f'Running 1/8 GRU and 1/32 if : {self.args.n_gru_layers==3} and 1/16 if : {self.args.n_gru_layers>=2}')
+                if profile:
+                    torch.cuda.synchronize()
+                    end_gru_highres = time.perf_counter()
+                    gru_highres_time += end_gru_highres - start_gru_highres
+
+            if profile:
+                torch.cuda.synchronize()
+                end_gru_total = time.perf_counter()
+                gru_total_time += end_gru_total-start_gru_total
 
             # in stereo mode, project flow onto epipolar
             delta_flow[:,1] = 0.0
@@ -126,16 +187,44 @@ class RAFTStereo(nn.Module):
             if test_mode and itr < iters-1:
                 continue
 
+
+            if profile:
+                torch.cuda.synchronize()
+                start_upflow = time.perf_counter()
             # upsample predictions
             if up_mask is None:
                 flow_up = upflow8(coords1 - coords0)
             else:
                 flow_up = self.upsample_flow(coords1 - coords0, up_mask)
             flow_up = flow_up[:,:1]
+            
+            if profile:
+                torch.cuda.synchronize()
+                end_upflow = time.perf_counter()
+                upflow_time += end_upflow - start_upflow
 
             flow_predictions.append(flow_up)
 
+        if profile:
+            torch.cuda.synchronize()
+            end_time = time.perf_counter()
+            total_time = end_time-start_context
+        
         if test_mode:
+            if profile:
+                profiling_info = {
+                    "image_size": image1.shape[2]*image1.shape[3],
+                    "context_time": context_time,
+                    "correlation_time": corr_time,
+                    "GRU_low_time": gru_lowres_time,
+                    "GRU_med_time": gru_medres_time,
+                    "GRU_high_time": gru_highres_time,
+                    "GRU_total_time": gru_total_time,
+                    "Upflow_time": upflow_time,
+                    "Total_time": total_time
+                }
+                return flow_predictions, profiling_info
+        
             return coords1 - coords0, flow_up
-
+        
         return flow_predictions

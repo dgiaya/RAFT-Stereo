@@ -1,13 +1,12 @@
 name: raftstereo
 channels:
   - pytorch
+  - nvidia
   - bioconda
   - defaults
 dependencies:
-  - python=3.7.6
-  - pytorch=1.7.0
-  - torchvision=0.8.1
-  - cudatoolkit=10.2.89
+  - python=3.10.12
+  - cuda-toolkit=12.2
   - matplotlib
   - tensorboard
   - scipy
@@ -17,3 +16,8 @@ dependencies:
   - imageio
   - scikit-image
   - p7zip
+  - pip
+  - pip:
+    - /home/auv/torch_wheels/torch-2.3.0-cp310-cp310-linux_aarch64.whl
+    - /home/auv/torch_wheels/torchvision-0.18.0a0+6043bc2-cp310-cp310-linux_aarch64.whl
+    - /home/auv/torch_wheels/torchaudio-2.3.0+952ea74-cp310-cp310-linux_aarch64.whl

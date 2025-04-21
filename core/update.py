@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from opt_einsum import contract
+import time
 
 class FlowHead(nn.Module):
     def __init__(self, input_dim=128, hidden_dim=256, output_dim=2):
@@ -122,12 +123,24 @@ class BasicMultiUpdateBlock(nn.Module):
             else:
                 net[1] = self.gru16(net[1], *(inp[1]), pool2x(net[0]))
         if iter08:
+            torch.cuda.synchronize()
+            start_motion_encoder = time.perf_counter()
             motion_features = self.encoder(flow, corr)
+            torch.cuda.synchronize()
+            end_motion_encoder = time.perf_counter()
+            # print(f"Motion Encoder Time: {end_motion_encoder - start_motion_encoder:.6f} seconds")
+            torch.cuda.synchronize()
+            start_gru08 = time.perf_counter()
+
             if self.args.n_gru_layers > 1:
                 net[0] = self.gru08(net[0], *(inp[0]), motion_features, interp(net[1], net[0]))
             else:
                 net[0] = self.gru08(net[0], *(inp[0]), motion_features)
-
+            
+            torch.cuda.synchronize()
+            end_gru08 = time.perf_counter()
+            # (f"GRU08 Time: {end_gru08 - start_gru08:.6f} seconds")
+                
         if not update:
             return net
 

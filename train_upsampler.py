@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from core.raft_stereo import RAFTStereo
-from core.disparity_upsampler import DisplarityUpsampler
+from core.disparity_upsampler import DisparityUpsampler
 
 from evaluate_stereo import *
 from evaluate_upsample import *
@@ -255,7 +255,7 @@ def train(args):
     # Here we are upsampling disparity, naming conventions are slightly mixed where it intermingles with RAFT code
     
     # Initialize the DisparityUpsampler model
-    model = DisplarityUpsampler(
+    model = DisparityUpsampler(
         image_dim=3,  
         feature_dim=256, 
         scale=SCALE  # TODO make this a command line argument

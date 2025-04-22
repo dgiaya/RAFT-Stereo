@@ -223,7 +223,7 @@ class RAFTStereo(nn.Module):
                     "Upflow_time": upflow_time,
                     "Total_time": total_time
                 }
-                return flow_predictions, profiling_info
+                return coords1 - coords0, flow_up, profiling_info
         
             return coords1 - coords0, flow_up
         

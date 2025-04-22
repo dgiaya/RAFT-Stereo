@@ -261,9 +261,21 @@ class Middlebury(StereoDataset):
     def __init__(self, aug_params=None, root='datasets/Middlebury', split='F'):
         super(Middlebury, self).__init__(aug_params, sparse=True, reader=frame_utils.readDispMiddlebury)
         assert os.path.exists(root)
-        assert split in ["F", "H", "Q", "2014"]
+        assert split in ["F", "H", "Q", "2014", "Validation", "Test"]
         if split == "2014": # datasets/Middlebury/2014/Pipes-perfect/im0.png
             scenes = list((Path(root) / "2014").glob("*"))
+            for scene in scenes:
+                for s in ["E","L",""]:
+                    self.image_list += [ [str(scene / "im0.png"), str(scene / f"im1{s}.png")] ]
+                    self.disparity_list += [ str(scene / "disp0.pfm") ]
+        elif split == "Validation": # datasets/Middlebury/2014/Pipes-perfect/im0.png
+            scenes = list((Path(root) / "Validation").glob("*"))
+            for scene in scenes:
+                for s in ["E","L",""]:
+                    self.image_list += [ [str(scene / "im0.png"), str(scene / f"im1{s}.png")] ]
+                    self.disparity_list += [ str(scene / "disp0.pfm") ]
+        elif split == "Test": # datasets/Middlebury/2014/Pipes-perfect/im0.png
+            scenes = list((Path(root) / "Test").glob("*"))
             for scene in scenes:
                 for s in ["E","L",""]:
                     self.image_list += [ [str(scene / "im0.png"), str(scene / f"im1{s}.png")] ]
@@ -315,7 +327,7 @@ def fetch_dataloader(args):
         train_dataset = new_dataset if train_dataset is None else train_dataset + new_dataset
 
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, 
-        pin_memory=True, shuffle=True, num_workers=int(os.environ.get('SLURM_CPUS_PER_TASK', 6))-2, drop_last=True)
+        pin_memory=True, shuffle=True, num_workers=int(os.environ.get('SLURM_CPUS_PER_TASK', 8)), drop_last=True) # persistent_workers=True, prefetch_factor=2)
 
     logging.info('Training with %d image pairs' % len(train_dataset))
     return train_loader
